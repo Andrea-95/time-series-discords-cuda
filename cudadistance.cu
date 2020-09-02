@@ -12,7 +12,6 @@
 #include <cstdlib>
 #include <iterator>
 
-
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 
@@ -28,7 +27,7 @@
 using namespace std;
 
 
-__global__ void sequencesDistance(int indexFirstSubsequence, int tsLength, float* dev_timeSeries, float* dev_distances, int* dev_locations) {
+__global__ void sequencesDistance(int indexFirstSubsequence, int tsLength, float* dev_blocksDistances, float* dev_timeSeries, float* dev_finalDistances, int* dev_locations) {
 
     extern __shared__ float cache[];                                                
     //float threadDist = 99999999;
@@ -38,9 +37,9 @@ __global__ void sequencesDistance(int indexFirstSubsequence, int tsLength, float
     float diff;
     float power;
     int first = indexFirstSubsequence;
-    int second = blockIdx.x * blockDim.x + threadIdx.x + SUBSEQLENGTH;
+    int second = blockIdx.x * blockDim.x + threadIdx.x;
 
-    cache[threadIdx.x] = dev_timeSeries[second];                                      // Ogni thread carica parte di timeseries nella memoria shared
+    cache[threadIdx.x] = dev_timeSeries[second];                                      // Ogni thread carica parte di timeSeries nella memoria shared
 
     //while (second < tsLength - subSeqLength + 1) {
 
@@ -52,6 +51,7 @@ __global__ void sequencesDistance(int indexFirstSubsequence, int tsLength, float
         }
     }
 
+    dev_blocksDistances[threadIdx.x] = distanza_quadratica;
     /*
     distance = sqrt(sum);
 
@@ -85,7 +85,7 @@ __global__ void sequencesDistance(int indexFirstSubsequence, int tsLength, float
 }
 
 
-void compareSubsequences(float* timeSeriesHost, int tsLength, float* dev_timeSeries, float* dev_distances, int* dev_locations) {
+void compareSubsequences(float* timeSeriesHost, int tsLength, float* dev_blocksDistances, float* dev_timeSeries, float* dev_finalDistances, int* dev_locations) {
 
     __constant__ float primo_vettore_confronto[SUBSEQLENGTH];                           // Si crea il vettore della memoria constant e lo si riempe con una parte
                                                                                         // del vettore timeSeries lungo SUBSEQLENGTH partendo dall'indice i
@@ -94,9 +94,9 @@ void compareSubsequences(float* timeSeriesHost, int tsLength, float* dev_timeSer
 
     for (int i = 0; i <= tsLength - SUBSEQLENGTH * 2; i++) {                            // Outer loop
 
-        memcpy(support, &timeSeriesHost[i], sizeof(float) * SUBSEQLENGTH);              // Si copia in support gli elementi di timeSeriesHost partendo da i
+        memcpy(support, &timeSeriesHost[i], sizeof(float) * SUBSEQLENGTH);              // Si copiano in support gli elementi di timeSeriesHost partendo da i
         cudaMemcpyToSymbol(primo_vettore_confronto, support, 10 * sizeof(float), 0, cudaMemcpyHostToDevice);
-        sequencesDistance<<<NUMBLOCKS, NUMTHREADS, NUMTHREADS *sizeof(float)>>>(i, tsLength, dev_timeSeries, dev_distances, dev_locations);
+        sequencesDistance<<<NUMBLOCKS, NUMTHREADS, (NUMTHREADS + SUBSEQLENGTH - 1) * sizeof(float)>>>(i, tsLength, dev_blocksDistances, dev_timeSeries, dev_finalDistances, dev_locations);
     }
     free(support);
 }
@@ -153,7 +153,6 @@ int main() {
     //----------------Blocco TXT start-------------------------------------
         const int tsLengthTxt = 24125;
 
-        
         float* timeSeriesTxt;
         float* distancesTxt;
         int* locationsTxt;
@@ -170,24 +169,25 @@ int main() {
 
         readFile(timeSeriesTxt, fileNameTxt);
 
+        float* dev_blocksDistancesTxt;               // Vettore sulla memoria global dove ogni thread salva il risultato della distanza che calcola
         float* dev_timeSeriesTxt;
-        float* dev_distancesTxt;
+        float* dev_finalDistancesTxt;
         int* dev_locationsTxt;
-        float* dev_blockDistancesTxt;               // Vettore sulla memoria global dove ogni thread salva il risultato della distanza che calcola 
 
+        cudaMalloc((void**)&dev_blocksDistancesTxt, tsLengthTxt * sizeof(float));
         cudaMalloc((void**)&dev_timeSeriesTxt, tsLengthTxt * sizeof(float));
-        cudaMalloc((void**)&dev_distancesTxt, tsLengthTxt * sizeof(float));
+        cudaMalloc((void**)&dev_finalDistancesTxt, tsLengthTxt * sizeof(float));
         cudaMalloc((void**)&dev_locationsTxt, tsLengthTxt * sizeof(int));
-        cudaMalloc((void**)&dev_blockDistancesTxt, tsLengthTxt * sizeof(float));
+        
 
         cudaMemcpy(dev_timeSeriesTxt, timeSeriesTxt, tsLengthTxt * sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(dev_distancesTxt, distancesTxt, tsLengthTxt * sizeof(float), cudaMemcpyHostToDevice);
+        cudaMemcpy(dev_finalDistancesTxt, distancesTxt, tsLengthTxt * sizeof(float), cudaMemcpyHostToDevice);
         cudaMemcpy(dev_locationsTxt, locationsTxt, tsLengthTxt * sizeof(int), cudaMemcpyHostToDevice);
 
-        compareSubsequences(timeSeriesTxt, tsLengthTxt, dev_timeSeriesTxt, dev_distancesTxt, dev_locationsTxt);     // Funzione che lancia il kernel
+        compareSubsequences(timeSeriesTxt, tsLengthTxt, dev_blocksDistancesTxt, dev_timeSeriesTxt, dev_finalDistancesTxt, dev_locationsTxt);     // Funzione che lancia il kernel
 
         cudaMemcpy(locationsTxt, dev_locationsTxt, tsLengthTxt * sizeof(int), cudaMemcpyDeviceToHost);
-        cudaMemcpy(distancesTxt, dev_distancesTxt, tsLengthTxt * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(distancesTxt, dev_finalDistancesTxt, tsLengthTxt * sizeof(float), cudaMemcpyDeviceToHost);
 
         scriviFile(distancesTxt, locationsTxt, fileNameTxt, tsLengthTxt);
 
@@ -196,9 +196,9 @@ int main() {
         free(locationsTxt);
 
         cudaFree(dev_timeSeriesTxt);
-        cudaFree(dev_distancesTxt);
+        cudaFree(dev_finalDistancesTxt);
         cudaFree(dev_locationsTxt);
-        cudaFree(dev_blockDistancesTxt);
+        cudaFree(dev_blocksDistancesTxt);
     //----------------Blocco TXT end-------------------------------------
     
 
@@ -219,34 +219,39 @@ int main() {
 
     cout << "File name: " << fileNameCsv << endl;
     cout << "File length: " << tsLengthCsv << endl;
-    cout << "Subsequence length: " << subSeqLength << endl;
+    cout << "Subsequence length: " << SUBSEQLENGTH << endl;
 
     readFile(timeSeriesCsv, fileNameCsv);
 
-    float* dev_timeSeriesCsv, * dev_distancesCsv;
+    float* dev_blocksDistancesCsv;               // Vettore sulla memoria global dove ogni thread salva il risultato della distanza che calcola
+    float* dev_timeSeriesCsv, 
+    float* dev_finalDistancesCsv;
     int* dev_locationsCsv;
+
+    cudaMalloc((void**)&dev_blocksDistancesCsv, tsLengthCsv * sizeof(float));
     cudaMalloc((void**)&dev_timeSeriesCsv, tsLengthCsv * sizeof(float));
-    cudaMalloc((void**)&dev_distancesCsv, tsLengthCsv * sizeof(float));
+    cudaMalloc((void**)&dev_finalDistancesCsv, tsLengthCsv * sizeof(float));
     cudaMalloc((void**)&dev_locationsCsv, tsLengthCsv * sizeof(int));
 
     cudaMemcpy(dev_timeSeriesCsv, timeSeriesCsv, tsLengthCsv * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_distancesCsv, distancesCsv, tsLengthCsv * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_finalDistancesCsv, distancesCsv, tsLengthCsv * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(dev_locationsCsv, locationsCsv, tsLengthCsv * sizeof(int), cudaMemcpyHostToDevice);
 
-    compareSubsequences(subSeqLength, tsLengthCsv, dev_timeSeriesCsv, dev_distancesCsv, dev_locationsCsv);
+    compareSubsequences(timeSeriesCsv, tsLengthCsv, dev_blocksDistancesCsv, dev_timeSeriesCsv, dev_finalDistancesCsv, dev_locationsCsv);
 
     cudaMemcpy(locationsCsv, dev_locationsCsv, tsLengthCsv * sizeof(int), cudaMemcpyDeviceToHost);
-    cudaMemcpy(distancesCsv, dev_distancesCsv, tsLengthCsv * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(distancesCsv, dev_finalDistancesCsv, tsLengthCsv * sizeof(float), cudaMemcpyDeviceToHost);
 
-    scriviFile(distancesCsv, locationsCsv, fileNameCsv, tsLengthCsv, subSeqLength);
+    scriviFile(distancesCsv, locationsCsv, fileNameCsv, tsLengthCsv);
 
     free(timeSeriesCsv);
     free(distancesCsv);
     free(locationsCsv);
 
     cudaFree(dev_timeSeriesCsv);
-    cudaFree(dev_distancesCsv);
+    cudaFree(dev_finalDistancesCsv);
     cudaFree(dev_locationsCsv);
+    cudaFree(dev_blocksDistancesCsv);
     //----------------Blocco CSV end--------------------------------------
     */
 
