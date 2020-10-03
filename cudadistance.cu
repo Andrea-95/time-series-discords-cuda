@@ -2,7 +2,7 @@
 #ifndef __CUDACC__
 #define __CUDACC__
 #endif
-*/
+
 
 #include <iostream>
 #include <stdio.h>
@@ -82,7 +82,7 @@ __global__ void sequencesDistance(int indexFirstSubsequence, float* dev_timeSeri
     float diff;
     float power;
     int first_arr_index = indexFirstSubsequence;
-    int second_arr_index = blockIdx.x * blockDim.x + threadIdx.x + SUBSEQLENGTH;
+    int second_arr_index = blockIdx.x * blockDim.x + threadIdx.x;
 
     int indice_cache = threadIdx.x;
 
@@ -113,7 +113,7 @@ __global__ void sequencesDistance(int indexFirstSubsequence, float* dev_timeSeri
         dev_blocksDistances[blockIdx.x] = sqrt(distanza_quadratica);
         dev_blocksLocations[blockIdx.x] = second_arr_index;
     }
-    */
+    
 }
 
 
@@ -145,7 +145,7 @@ __global__ void finalReduction(int indexFirstSubsequence, int* dev_blocksLocatio
         __syncthreads();
         i /= 2;
     }
-    */
+    
 }
 
 
@@ -284,3 +284,4 @@ int main() {
 
     return 0;
 }
+*/
