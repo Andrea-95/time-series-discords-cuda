@@ -25,10 +25,10 @@
 #define NUMTHREADS 128
 #define TSLENGTH 24125                      // Lunghezza txt
 //#define TSLENGTH 2299                     // Lunghezza csv
-#define NUMBLOCKS (TSLENGTH + NUMTHREADS - 1) / NUMTHREADS             // Calcolo del numero ottimale di blocchi
+#define NUMBLOCKS (TSLENGTH + NUMTHREADS - 1) / NUMTHREADS            // Calcolo del numero ottimale di blocchi
 
-__constant__ double primo_vettore_confronto[SUBSEQLENGTH];              // Si crea il vettore della memoria constant e lo si riempe con una parte
-                                                                       // del vettore timeSeries lungo SUBSEQLENGTH partendo dall'indice i
+__constant__ double primo_vettore_confronto[SUBSEQLENGTH];            // Si crea il vettore della memoria constant e lo si riempe con una parte
+                                                                      // del vettore timeSeries lungo SUBSEQLENGTH partendo dall'indice i
 using namespace std;
 
 
@@ -37,9 +37,18 @@ __inline__ __device__ void warpReduceMin(double& val, int& idx) {
     for (int offset = warpSize / 2; offset > 0; offset /= 2) {
         double tmpVal = __shfl_down_sync(0xFFFFFFFF, val, offset, 32);
         int tmpIdx = __shfl_down_sync(0xFFFFFFFF, idx, offset, 32);
+        
+        if (tmpVal == val) {                                          // Se due valori di distanza sono uguai si salva la posizione più piccola
+            if (tmpIdx < idx) {
+                idx = tmpIdx;
+            }
+        }
+
         if (tmpVal < val) {
-            val = tmpVal;
-            idx = tmpIdx;
+            if (!(tmpVal == 0)) {                                   // TODO verifica dei valori = 0. Alcuni sono corretti in quanto la distanza tra due sottosequenza è effettivamente 0
+                val = tmpVal;
+                idx = tmpIdx;
+            }
         }
     }
 }
@@ -47,20 +56,21 @@ __inline__ __device__ void warpReduceMin(double& val, int& idx) {
 
 __inline__ __device__ void blockReduceMin(double& val, int& idx) {
 
-    static __shared__ double values[32], indices[32];   // Shared mem for 32 partial mins
+    static __shared__ double values[32], indices[32];               // Shared mem for 32 partial mins
     int lane = threadIdx.x % warpSize;
     int wid = threadIdx.x / warpSize;
 
-    warpReduceMin(val, idx);                            // Each warp performs partial reduction
+    warpReduceMin(val, idx);                                        // Each warp performs partial reduction
 
     if (lane == 0) {
-        values[wid] = val;                              // Write reduced value to shared memory
-        indices[wid] = idx;                             // Write reduced value to shared memory
+        values[wid] = val;                                          // Write reduced value to shared memory
+        indices[wid] = idx;                                         // Write reduced value to shared memory
+
     }
 
-    __syncthreads();                                    // Wait for all partial reductions
+    __syncthreads();                                                // Wait for all partial reductions
 
-    if (threadIdx.x < blockDim.x / warpSize) {          // Read from shared memory only if that warp existed
+    if (threadIdx.x < (blockDim.x + warpSize - 1) / warpSize) {     // Read from shared memory only if that warp existed
         val = values[lane];
         idx = indices[lane];
     }
@@ -70,79 +80,62 @@ __inline__ __device__ void blockReduceMin(double& val, int& idx) {
     }
 
     if (wid == 0) {
-        warpReduceMin(val, idx);                        // Final reduce within first warp
+        warpReduceMin(val, idx);                                    // Final reduce within first warp
     }
 }
 
 
-__global__ void sequencesDistance(int indexFirstSubsequence, double* dev_timeSeries, double* dev_blocksDistances, int* dev_blocksLocations, int* dev_finalLocations, double* dev_finalDistances) {
+__global__ void sequencesDistance(int indexFirstSubsequence, double* dev_timeSeries, double* dev_blocksDistances, int* dev_blocksLocations) {
 
-    extern __shared__ double cache[];                                                    // La sua lunghezza è NUMTHREADS + SUBSEQLENGTH - 1                                      
-    double distanza_quadratica;
-    double distanza;
+    extern __shared__ double cache[];                                        // La sua lunghezza è NUMTHREADS + SUBSEQLENGTH - 1                                      
+    double sum;
+    double distanza = 888888888;                                             // Variabile a cui è assegnata la distanza. I thread non coinvolti nel calcolo hanno questo valore come default
     double diff;
     double power;
-    int first_arr_index = indexFirstSubsequence;
-    int second_arr_index = blockIdx.x * blockDim.x + threadIdx.x;
+    int first_arr_index = indexFirstSubsequence;                             // Indice della prima sottosequenza che verrà confrontata con tutte le altre
+    int second_arr_index = blockIdx.x * blockDim.x + threadIdx.x;            // Indice della seconda sottosequenza che si confronta con la prima. L'id globale di ogni thread stabilisce il punto di partenza
     int altro_indice = blockIdx.x * blockDim.x + threadIdx.x;
 
     int indice_cache = threadIdx.x;
 
-    while (indice_cache < (NUMTHREADS + SUBSEQLENGTH - 1)) {                            // Ogni thread carica nella shared uno o più elementi di timeSeries
+    while (indice_cache < (NUMTHREADS + SUBSEQLENGTH - 1)) {                 // Ogni thread carica nella shared uno o più elementi di timeSeries
         cache[indice_cache] = dev_timeSeries[altro_indice];
         indice_cache = indice_cache + NUMTHREADS;
         altro_indice = altro_indice + NUMTHREADS;
     }
 
-    __syncthreads();                                                                    // SYNC perché non tutti possono aver già riempito la cache  
+    __syncthreads();                                                         // SYNC perché non tutti possono aver già riempito la cache  
 
-    //if (blockIdx.x == 0) {
-
-    //  && second_arr_index < TSLENGTH - SUBSEQLENGTH + 1
-    if (abs(second_arr_index - first_arr_index) >= SUBSEQLENGTH) {
+    if (abs(second_arr_index - first_arr_index) >= SUBSEQLENGTH && second_arr_index < TSLENGTH - SUBSEQLENGTH + 1) {    // Verifica di self-match e controllo che il secondo indice rientri nei valori consentiti
 
         for (int i = 0; i < SUBSEQLENGTH; i++) {
             diff = primo_vettore_confronto[i] - cache[threadIdx.x + i];
             power = diff * diff;
-            distanza_quadratica = distanza_quadratica + power;
+            sum = sum + power;
         }
 
-        distanza = sqrt(distanza_quadratica);                                               // Da rimuovere nella versione finale, la radice si calcola alla fine
-
-        //dev_finalDistances[blockIdx.x * blockDim.x + threadIdx.x] = distanza;               // Per salvare tutte le distanze calcolate rispetto ad una sottosequenza
-        //dev_finalLocations[blockIdx.x * blockDim.x + threadIdx.x] = second_arr_index;       // tenere queste due righe
-
-
-        ///*
-
-        //*/
-    //}
-
-
-        blockReduceMin(distanza, second_arr_index);                                         // Per salvare solo le distanzze migliori di ogni blocco tenere questa riga
-
-
-        if (threadIdx.x == 0) {                                                             // e anche il blocco dell'if
-            dev_blocksDistances[blockIdx.x] = distanza;
-            dev_blocksLocations[blockIdx.x] = second_arr_index;
-        }
-
-    }
-    else {
-        distanza = 888888888;
-
+        distanza = sqrt(sum);                                                // Da rimuovere nella versione finale, la radice si calcola alla fine
     }
 
+    blockReduceMin(distanza, second_arr_index);
 
+    if (threadIdx.x == 0) {
+        dev_blocksDistances[blockIdx.x] = distanza;
+        dev_blocksLocations[blockIdx.x] = second_arr_index;
+    }
 }
 
 
 __global__ void finalReduction(int indexFirstSubsequence, int* dev_blocksLocations, double* dev_blocksDistances, int* dev_finalLocations, double* dev_finalDistances) {
 
-    double val = dev_blocksDistances[threadIdx.x];
-    int index = dev_blocksLocations[threadIdx.x];
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    double val = dev_blocksDistances[tid];
+    int index = dev_blocksLocations[tid];
 
     blockReduceMin(val, index);
+
+    //printf("thread = %d, indice = %d, valore = %f\n", threadIdx.x, index, val);
 
     if (threadIdx.x == 0) {
         dev_finalDistances[indexFirstSubsequence] = val;
@@ -153,13 +146,16 @@ __global__ void finalReduction(int indexFirstSubsequence, int* dev_blocksLocatio
 
 void compareSubsequences(double* timeSeriesHost, double* dev_blocksDistances, int* dev_blocksLocations, double* dev_timeSeries, double* dev_finalDistances, int* dev_finalLocations) {
 
-    for (int i = 0; i <= TSLENGTH - SUBSEQLENGTH * 2; i++) {                              // Outer loop, se commentato si testa il kernel su una sola sottosequenza
+    for (int i = 0; i <= TSLENGTH - SUBSEQLENGTH; i++) {        // Outer loop
 
-        cudaMemcpyToSymbol(primo_vettore_confronto, &timeSeriesHost[i], SUBSEQLENGTH * sizeof(double), 0, cudaMemcpyHostToDevice);
+        cudaMemcpyToSymbol(primo_vettore_confronto, &timeSeriesHost[i], SUBSEQLENGTH * sizeof(double), 0, cudaMemcpyHostToDevice);  // Copia nella constant la sottosequenza all'i-esima posizione 
+                                                                                                                                    // da confrontare con tutte le altre
 
-        sequencesDistance << <NUMBLOCKS, NUMTHREADS, (NUMTHREADS + SUBSEQLENGTH - 1) * sizeof(double) >> > (i, dev_timeSeries, dev_blocksDistances, dev_blocksLocations, dev_finalLocations, dev_finalDistances);
+        sequencesDistance <<<NUMBLOCKS, NUMTHREADS, (NUMTHREADS + SUBSEQLENGTH - 1) * sizeof(double)>>> (i, dev_timeSeries, dev_blocksDistances, dev_blocksLocations);  // Kernel che esegue il calcolo delle distanze 
+                                                                                                                                                                        // ed una prima riduzione
 
-        finalReduction << <1, NUMBLOCKS >> > (i, dev_blocksLocations, dev_blocksDistances, dev_finalLocations, dev_finalDistances);
+        finalReduction <<<1, NUMBLOCKS>>>(i, dev_blocksLocations, dev_blocksDistances, dev_finalLocations, dev_finalDistances); // Riduce i risultati ottenuti dal kernel precedente    
+                                                                                                                                // TODO esecuzione di questo kernel ripetuta tante volte
     }
 
     cudaFree(primo_vettore_confronto);
@@ -241,7 +237,7 @@ int main() {
     readFile(timeSeries, fileName);
 
     double* dev_blocksDistances;                 // Vettore sulla memoria global dove ogni blocco salva il risultato della distanza che calcola
-    int* dev_blocksLocations;                   // Vettore sulla memoria global dove ogni blocco salva l'indice della propria migliore distanza trovata 
+    int* dev_blocksLocations;                    // Vettore sulla memoria global dove ogni blocco salva l'indice della propria migliore distanza trovata 
     double* dev_finalDistances;
     int* dev_finalLocations;
     double* dev_timeSeries;
@@ -261,28 +257,7 @@ int main() {
     cudaMemcpy(locations, dev_finalLocations, TSLENGTH * sizeof(int), cudaMemcpyDeviceToHost);
     cudaMemcpy(distances, dev_finalDistances, TSLENGTH * sizeof(double), cudaMemcpyDeviceToHost);
 
-    /*
-    double temp;
-    int temp2;
-    for (int i = 0; i < TSLENGTH; i++)
-    {
-        for (int j = i + 1; j < TSLENGTH; j++)
-        {
-            if (distances[i] > distances[j])
-            {
-                temp = distances[i];
-                distances[i] = distances[j];
-                distances[j] = temp;
-
-                temp2 = locations[i];
-                locations[i] = locations[j];
-                locations[j] = temp2;
-            }
-        }
-    }
-    */
-
-    scriviFile(distances, locations, fileName);         // Testare con sottosequenza > n thread in un blocco
+    scriviFile(distances, locations, fileName);         // TODO testare con sottosequenza > n thread in un blocco
 
     free(timeSeries);
     free(distances);
