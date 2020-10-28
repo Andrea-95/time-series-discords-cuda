@@ -22,9 +22,11 @@
 #include <algorithm>
 
 #define SUBSEQLENGTH 10
-#define NUMTHREADS 32
-#define TSLENGTH 24125                      // Lunghezza txt
+#define NUMTHREADS 512
+//#define TSLENGTH 24125                      // Lunghezza txt
 //#define TSLENGTH 2299                     // Lunghezza csv
+#define TSLENGTH 586086
+
 #define NUMBLOCKS (TSLENGTH + NUMTHREADS - 1) / NUMTHREADS            // Calcolo del numero ottimale di blocchi
 
 __constant__ double primo_vettore_confronto[SUBSEQLENGTH];            // Si crea il vettore della memoria constant e lo si riempe con una parte
@@ -58,6 +60,12 @@ __inline__ __device__ void warpReduceMin(double& val, int& idx) {
 __inline__ __device__ void blockReduceMin(double& val, int& idx, int currentThreads, int indexFirstSubsequence) {
 
     static __shared__ double values[32], indices[32];               // Shared mem for 32 partial mins
+    if (threadIdx.x == 0) {
+        for (int i = 0; i < 32; i++) {
+            values[i] = DBL_MAX;
+        }
+    }
+
     int lane = threadIdx.x % warpSize;
     int wid = threadIdx.x / warpSize;
 
@@ -136,7 +144,7 @@ __global__ void finalReduction(int indexFirstSubsequence, int previousBlocks, in
 
         blockReduceMin(val, idx, previousBlocks, indexFirstSubsequence);
 
-        if (tid == 0 && gridDim.x != 1) {           // Si utilizzano i vettori dev_blocksDistances e dev_blocksLocations per salvare i risultati delle riduzioni
+        if (threadIdx.x == 0 && gridDim.x != 1) {           // Si utilizzano i vettori dev_blocksDistances e dev_blocksLocations per salvare i risultati delle riduzioni
             dev_blocksDistances[blockIdx.x] = val;  // ad ogni nuova iterazione finché si utilizza più di un blocco 
             dev_blocksLocations[blockIdx.x] = idx;
         }
@@ -163,11 +171,11 @@ void compareSubsequences(double* dev_blocksDistances, int* dev_blocksLocations, 
         cudaMemcpyToSymbol(primo_vettore_confronto, &dev_timeSeries[i], SUBSEQLENGTH * sizeof(double), 0, cudaMemcpyDeviceToDevice);  // Copia nella constant la sottosequenza all'i-esima posizione 
                                                                                                                                       // da confrontare con tutte le altre
 
-        sequencesDistance << <NUMBLOCKS, NUMTHREADS, (NUMTHREADS + SUBSEQLENGTH - 1) * sizeof(double) >> > (i, dev_timeSeries, dev_blocksDistances, dev_blocksLocations);  // Kernel che esegue il calcolo delle distanze 
+        sequencesDistance<<<NUMBLOCKS, NUMTHREADS, (NUMTHREADS + SUBSEQLENGTH - 1) * sizeof(double)>>>(i, dev_timeSeries, dev_blocksDistances, dev_blocksLocations);  // Kernel che esegue il calcolo delle distanze 
                                                                                                                                                                       // ed una prima riduzione
 
         while (continueReduction) {
-            finalReduction << <currentBlocks, threads >> > (i, previousBlocks, dev_blocksLocations, dev_blocksDistances, dev_finalLocations, dev_finalDistances); // Riduce i risultati ottenuti dal kernel precedente
+            finalReduction<<<currentBlocks, threads>>>(i, previousBlocks, dev_blocksLocations, dev_blocksDistances, dev_finalLocations, dev_finalDistances); // Riduce i risultati ottenuti dal kernel precedente
 
             if (currentBlocks == 1) {
                 continueReduction = false;
@@ -235,7 +243,9 @@ void scriviFile(double* distances, int* locations, string fileName) {
 int main() {
 
     //string fileName = "ecg0606_1.csv";
-    string fileName = "nprs44.txt";
+    //string fileName = "nprs44.txt";
+
+    string fileName = "318_signal1.txt";
 
     double* timeSeries;
     double* distances;
