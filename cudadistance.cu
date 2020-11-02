@@ -35,7 +35,7 @@ __constant__ double primo_vettore_confronto[SUBSEQLENGTH];          // Si crea i
 using namespace std;
 
 
-__inline__ __device__ void warpReduceMin(double& val, int& idx, int indexFirstSubsequence) {
+__inline__ __device__ void warpReduceMin(double& val, int& idx) {
 
     for (int offset = warpSize / 2; offset > 0; offset /= 2) {
 
@@ -67,7 +67,7 @@ __inline__ __device__ void blockReduceMin(double& val, int& idx, int currentThre
     int lane = threadIdx.x % warpSize;
     int wid = threadIdx.x / warpSize;
 
-    warpReduceMin(val, idx, indexFirstSubsequence);                                     // Each warp performs partial reduction
+    warpReduceMin(val, idx);                                     // Each warp performs partial reduction
 
     if (lane == 0) {
         values[wid] = val;                                       // Write reduced value to shared memory
@@ -86,7 +86,7 @@ __inline__ __device__ void blockReduceMin(double& val, int& idx, int currentThre
     }
 
     if (wid == 0) {
-        warpReduceMin(val, idx, indexFirstSubsequence);                                 // Final reduce within first warp
+        warpReduceMin(val, idx);                                 // Final reduce within first warp
     }
 }
 
@@ -172,11 +172,11 @@ void compareSubsequences(double* dev_blocksDistances, int* dev_blocksLocations, 
         cudaMemcpyToSymbol(primo_vettore_confronto, &dev_timeSeries[i], SUBSEQLENGTH * sizeof(double), 0, cudaMemcpyDeviceToDevice);  // Copia nella constant la sottosequenza all'i-esima posizione 
                                                                                                                                       // da confrontare con tutte le altre
 
-        sequencesDistance << <NUMBLOCKS, NUMTHREADS, (NUMTHREADS + SUBSEQLENGTH - 1) * sizeof(double) >> > (i, dev_timeSeries, dev_blocksDistances, dev_blocksLocations);  // Kernel che esegue il calcolo delle distanze 
+        sequencesDistance<<<NUMBLOCKS, NUMTHREADS, (NUMTHREADS + SUBSEQLENGTH - 1) * sizeof(double)>>>(i, dev_timeSeries, dev_blocksDistances, dev_blocksLocations);  // Kernel che esegue il calcolo delle distanze 
                                                                                                                                                                       // ed una prima riduzione
 
         while (continueReduction) {
-            finalReduction << <currentBlocks, threads >> > (i, previousBlocks, dev_blocksLocations, dev_blocksDistances, dev_finalLocations, dev_finalDistances); // Riduce i risultati ottenuti dal kernel precedente
+            finalReduction<<<currentBlocks, threads>>>(i, previousBlocks, dev_blocksLocations, dev_blocksDistances, dev_finalLocations, dev_finalDistances); // Riduce i risultati ottenuti dal kernel precedente
 
             if (currentBlocks == 1) {
                 continueReduction = false;
