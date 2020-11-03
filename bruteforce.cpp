@@ -39,7 +39,7 @@ void compareSubsequences(double* timeSeries, double* distances, int* locations, 
     int loc = 0;
 
     for (int i = 0; i <= tsLength - subSeqLength * 2; i++) {                              // Outer loop
-        nearestNeighborDist = 999999999;
+        nearestNeighborDist = DBL_MAX;
         for (int j = i; j <= tsLength - subSeqLength; j++) {                              // Inner loop
             if (abs(i - j) >= subSeqLength) {                                             // Non self match test
                 totalDist = sequencesDistance(i, j, subSeqLength, timeSeries);
