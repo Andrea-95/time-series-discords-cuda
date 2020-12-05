@@ -21,7 +21,7 @@
 
 #include <algorithm>
 
-#define SUBSEQLENGTH 10
+#define SUBSEQLENGTH 100
 #define NUMTHREADS 1024
 #define TSLENGTH 24125                      // Lunghezza txt
 //#define TSLENGTH 2299                     // Lunghezza csv
@@ -56,16 +56,16 @@ __inline__ __device__ void warpReduceMin(double& val, int& idx) {
 }
 
 
-__inline__ __device__ void blockReduceMin(double& val, int& idx, int currentThreads, int indexFirstSubsequence) {
+__inline__ __device__ void blockReduceMin(double& val, int& idx, int currentThreads, int indexFirstSubsequence, int bol) {
 
     static __shared__ double values[32], indices[32];            // Shared mem for 32 partial mins
 
-    if (threadIdx.x < 32) {
-        values[threadIdx.x] = DBL_MAX;
-    }
-
     int lane = threadIdx.x % warpSize;
     int wid = threadIdx.x / warpSize;
+
+    if (lane == 0) {                                            // Il primo thread di ogni warp inizializza un elemento della memoria shared
+        values[wid] = DBL_MAX;                                  // all'indice che corrisponde a quello del blocco di cui fa parte 
+    }
 
     warpReduceMin(val, idx);                                     // Each warp performs partial reduction
 
@@ -122,7 +122,7 @@ __global__ void sequencesDistance(int indexFirstSubsequence, double* dev_timeSer
         distanza = sqrt(sum);                                          // Da rimuovere nella versione finale, la radice si calcola alla fine
     }
 
-    blockReduceMin(distanza, second_arr_index, NUMTHREADS, indexFirstSubsequence);
+    blockReduceMin(distanza, second_arr_index, NUMTHREADS, indexFirstSubsequence, 0);
 
     if (threadIdx.x == 0) {
         dev_blocksDistances[blockIdx.x] = distanza;
@@ -143,7 +143,7 @@ __global__ void finalReduction(int indexFirstSubsequence, int previousBlocks, in
         idx = dev_blocksLocations[tid];
     }
 
-    blockReduceMin(val, idx, previousBlocks, indexFirstSubsequence);
+    blockReduceMin(val, idx, previousBlocks, indexFirstSubsequence, 1);
 
     if (threadIdx.x == 0 && gridDim.x != 1) {   // Si utilizzano i vettori dev_blocksDistances e dev_blocksLocations per salvare i risultati delle riduzioni
         dev_blocksDistances[blockIdx.x] = val;  // ad ogni nuova iterazione finché si utilizza più di un blocco 
