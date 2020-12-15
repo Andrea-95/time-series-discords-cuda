@@ -10,12 +10,12 @@
 using namespace std;
 
 
-double sequencesDistance(int indexFirstSubsequence, int indexSecondSubsequence, int subSeqLength, double* timeSeries) {
+float sequencesDistance(int indexFirstSubsequence, int indexSecondSubsequence, int subSeqLength, float* timeSeries) {
     
-    double distance = 0;
-    double sum = 0;
-    double diff = 0;
-    double power = 1;
+    float distance = 0;
+    float sum = 0;
+    float diff = 0;
+    float power = 1;
     int first = indexFirstSubsequence;
     int second = indexSecondSubsequence;
 
@@ -32,14 +32,12 @@ double sequencesDistance(int indexFirstSubsequence, int indexSecondSubsequence, 
 }
 
 
-void compareSubsequences(double* timeSeries, double* distances, int* locations, int subSeqLength, int tsLength) {
+void compareSubsequences(float* timeSeries, float* distances, int* locations, int subSeqLength, int tsLength) {
 
-    double totalDist = 0;
-    double nearestNeighborDist;
+    float totalDist = 0;
     int loc = 0;
 
     for (int i = 0; i <= tsLength - subSeqLength * 2; i++) {                              // Outer loop
-        nearestNeighborDist = DBL_MAX;
         for (int j = i; j <= tsLength - subSeqLength; j++) {                              // Inner loop
             if (abs(i - j) >= subSeqLength) {                                             // Non self match test
                 totalDist = sequencesDistance(i, j, subSeqLength, timeSeries);
@@ -60,10 +58,10 @@ void compareSubsequences(double* timeSeries, double* distances, int* locations, 
 
 
 //--------------------Lettura e scrittura file start--------------------------
-void readFile(double* timeSeries, string fileName) {
+void readFile(float* timeSeries, string fileName) {
 
     const char* c = fileName.c_str();
-    double num = 0;
+    float num = 0;
     int i = 0;
     ifstream readFile;
     readFile.open(c);
@@ -74,7 +72,7 @@ void readFile(double* timeSeries, string fileName) {
     }
 
     while (readFile >> num) {                                                        // Keep storing values from the text file so long as data exists
-        timeSeries[i] = double(num);
+        timeSeries[i] = float(num);
         i++;
     }
 
@@ -82,7 +80,7 @@ void readFile(double* timeSeries, string fileName) {
 }
 
 
-void scriviFile(double* distances, int* locations, string fileName, int tsLength, int subSeqLength) {
+void scriviFile(float* distances, int* locations, string fileName, int tsLength, int subSeqLength) {
     
     FILE* fp;
     char nomeFile;
@@ -111,7 +109,7 @@ void scriviFile(double* distances, int* locations, string fileName, int tsLength
 
 
 /*
-void writeToFile(vector<double> &distances, vector<int> &locations, string fileName) {
+void writeToFile(vector<float> &distances, vector<int> &locations, string fileName) {
 
     string nomeFile;
     nomeFile = ( "distances_" + fileName.erase(fileName.length() - 4, fileName.length()) + ".txt" ).c_str();
@@ -119,11 +117,11 @@ void writeToFile(vector<double> &distances, vector<int> &locations, string fileN
 
 
     ofstream output_distances("distances_" + fileName.erase(fileName.length() - 4, fileName.length()) + ".txt");
-    ostream_iterator<double> output_iterator1(output_distances, "\n");
+    ostream_iterator<float> output_iterator1(output_distances, "\n");
     copy(distances.begin(), distances.end(), output_iterator1);
 
     ofstream output_locations("positions_" + fileName.erase(fileName.length() - 4, fileName.length()) + ".txt");
-    ostream_iterator<double> output_iterator2(output_locations, "\n");
+    ostream_iterator<float> output_iterator2(output_locations, "\n");
     copy(locations.begin(), locations.end(), output_iterator2);
 }
 */
@@ -140,17 +138,17 @@ int main() {
     //string fileName = "318_signal1.txt";         // parametri txt
     //const int tsLength = 586086;
 
-    int subSeqLength = 10;
+    int subSeqLength = 200;
 
-    double* timeSeries;
-    double* distances;
+    float* timeSeries;
+    float* distances;
     int* locations;
 
-    timeSeries = (double*)malloc(tsLength * sizeof(double));
-    distances = (double*)malloc(tsLength * sizeof(double));
+    timeSeries = (float*)malloc(tsLength * sizeof(float));
+    distances = (float*)malloc(tsLength * sizeof(float));
     locations = (int*)malloc(tsLength * sizeof(int));
 
-    fill_n(distances, tsLength, DBL_MAX);
+    fill_n(distances, tsLength, FLT_MAX);
 
     cout << "File name: " << fileName << endl;
     cout << "File length: " << tsLength << endl;
